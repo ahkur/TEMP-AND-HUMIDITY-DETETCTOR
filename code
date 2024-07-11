@@ -1,0 +1,106 @@
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+#include <DHT.h>
+
+
+#define DHTPIN 4     
+#define DHTTYPE DHT22   
+
+DHT dht(4, DHT22);
+
+// BLE service and characteristic UUIDs
+#define SERVICE_UUID "12345678-1234-5678-1234-56789abcdef0"
+#define CHARACTERISTIC_UUID_TEMP "abcdef01-1234-5678-1234-56789abcdef0"
+#define CHARACTERISTIC_UUID_HUMID "abcdef02-1234-5678-1234-56789abcdef0"
+
+// Global variables for BLE
+BLECharacteristic *pTempCharacteristic;
+BLECharacteristic *pHumidCharacteristic;
+bool deviceConnected = false;
+
+// Callback for device connection and disconnection
+class MyServerCallbacks: public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) {
+    deviceConnected = true;
+    Serial.println("Device connected");
+  }
+
+  void onDisconnect(BLEServer* pServer) {
+    deviceConnected = false;
+    Serial.println("Device disconnected");
+  }
+};
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+
+  // Initialize BLE
+  BLEDevice::init("ESP32_DHT22");
+  BLEServer *pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+
+  // Create BLE service
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+
+  // Create BLE characteristics for temperature and humidity
+  pTempCharacteristic = pService->createCharacteristic(
+                         CHARACTERISTIC_UUID_TEMP,
+                         BLECharacteristic::PROPERTY_READ | 
+                         BLECharacteristic::PROPERTY_NOTIFY
+                       );
+  pTempCharacteristic->addDescriptor(new BLE2902());
+
+  pHumidCharacteristic = pService->createCharacteristic(
+                          CHARACTERISTIC_UUID_HUMID,
+                          BLECharacteristic::PROPERTY_READ | 
+                          BLECharacteristic::PROPERTY_NOTIFY
+                        );
+  pHumidCharacteristic->addDescriptor(new BLE2902());
+
+  // Start the service
+  pService->start();
+
+  // Start advertising
+  pServer->getAdvertising()->start();
+  Serial.println("Waiting for a client connection to notify...");
+}
+
+void loop() {
+  if (deviceConnected) {
+    // Read temperature and humidity from the DHT sensor
+    float temperature = dht.readTemperature();
+    float humidity = dht.readHumidity();
+
+    // Check if any reads failed and exit early (to try again)
+    if (isnan(temperature) || isnan(humidity)) {
+      Serial.println("Failed to read from DHT sensor!");
+      return;
+    }
+
+    // Convert the values to a string and set the characteristics
+    char tempStr[8];
+    char humidStr[8];
+    dtostrf(temperature, 1, 2, tempStr);
+    dtostrf(humidity, 1, 2, humidStr);
+
+    pTempCharacteristic->setValue(tempStr);
+    pTempCharacteristic->notify();
+
+    pHumidCharacteristic->setValue(humidStr);
+    pHumidCharacteristic->notify();
+
+    Serial.print("Temperature: ");
+    Serial.print(tempStr);
+    Serial.print("°C, Humidity: ");
+    Serial.print(humidStr);
+    Serial.println("%");
+  } else {
+    Serial.println("No device connected");
+  }
+
+  // Delay between measurements
+  delay(2000);
+}
